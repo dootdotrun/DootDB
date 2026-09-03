@@ -234,7 +234,7 @@ Not public API, not versioned, may change freely.
 | `GET /app/keys` · `POST /app/keys` · `DELETE /app/keys/{id}` | key management |
 | `GET /app/entries` · `GET /app/entries/{name}` | read-only explorer |
 | `GET /app/tags` | the tags this account has written — what the explorer lists by |
-| `GET /app/stream` | live feed — SSE, or a JSON batch (see below) |
+| `GET /app/stream` | live feed — one immediate JSON batch, polled with `?cursor=N` |
 
 **`GET /app/tags` exists because listing requires a tag and nothing else enumerates them**
 (D92). `GET /v1/entries` answers `missing_tag` without one, so without this the explorer is a
@@ -275,35 +275,30 @@ is a worse trade.
 
 ## The live feed
 
-`GET /app/stream` serves two framings on one path, and the **client's `Accept` header** chooses
-(D87). Buffering by an intermediary is a property of the network path rather than of the
-deployment, so there is no server-side switch: a proxy in front of one user must not take the
-live view away from everyone.
+`GET /app/stream` answers one immediate JSON batch (D95):
 
-| `Accept` | behaviour |
-|---|---|
-| `text/event-stream` | Open-ended SSE. `event: put`/`delete`/`resync`, `data: {"seq":N}`, and a heartbeat comment every 15 seconds |
-| anything else | One JSON batch, answered immediately: `{"events":[{"seq":N,"op":"put"}],"cursor":M,"resync":false}` |
+```
+{"events":[{"seq":N,"op":"put"}],"cursor":M,"resync":false}
+```
 
-**A frame is a change notification, not the change** (D85). It carries a sequence number and an
-operation, and nothing else — no name and no body. The change feed holds neither (a feed event is
-24 bytes), so naming the entry would mean a disk read per event per subscriber, and a body can be
-256 KB in any case. The dashboard's response to a frame is to re-run the listing it is already
-showing, which is free (reads are not metered) and produces a view that is *correct* rather than
-one patched together from frames it might have missed.
+The dashboard polls it every 3 seconds with `?cursor=N` and gets the next cursor back.
+Stateless: nothing about the request outlives it. That is deliberate — a delayed reply
+would have to hold a request slot from the pool the data plane shares, and a live view
+that can starve `/v1` is not one worth having.
 
-Events are filtered to the session's own account. A subscriber joins at the present moment, not
-at the start of the ring: the feed is for watching, not for catching up.
+**A batch is a change notification, not the change** (D85). It carries sequence numbers
+and operations, and nothing else — no name and no body. The change feed holds neither (a
+feed event is 24 bytes), so naming the entry would mean a disk read per event, and a body
+can be 256 KB in any case. The dashboard's response to a non-empty batch is to re-run the
+listing it is already showing, which is free (reads are not metered) and produces a view
+that is *correct* rather than one patched together from batches it might have missed.
 
-**`event: resync`** means the subscriber fell far enough behind to be lapped and should reload
-rather than assume continuity. The JSON framing says the same thing with `"resync": true`.
+Events are filtered to the session's own account. A poll with no cursor starts at the
+present moment, not at the start of the ring: the feed is for watching, not for catching
+up.
 
-The JSON framing is stateless: the client passes `?cursor=N` and gets the next cursor back, so
-nothing about the request outlives it. That is deliberate — a delayed reply would have to hold a
-request slot from the pool the data plane shares, and a fallback that can starve `/v1` is not a
-fallback.
-
-`503 capacity_exhausted` when the box is already serving its maximum number of live views.
+**`"resync": true`** means the client fell far enough behind to be lapped and should reload
+rather than assume continuity.
 
 ## Errors on this surface
 

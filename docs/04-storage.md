@@ -445,8 +445,8 @@ live view needs no separate mechanism. An in-memory ring buffer holds the most r
 **65,536** events as `(seq, account_id, location, op)` — 24 bytes each, about 1.5 MB
 total.
 
-SSE subscribers filter by `account_id`. A subscriber that falls behind the ring is
-sent a resync marker rather than being silently skipped. The feed is best-effort by
+Polling clients filter by `account_id`. A client that falls behind the ring is
+told to resync rather than being silently skipped. The feed is best-effort by
 design; it drives a UI, not a guarantee.
 
 **The ring belongs to the storage engine** (D44), published from inside the write path while
@@ -456,10 +456,9 @@ code underneath the global write mutex. Reading is a cursor-based poll — the s
 everything after a sequence it has already seen — so the engine holds no subscriber
 registry.
 
-The ring is built in M2 with the write path. Subscriber fan-out, SSE framing and the
-refcounted frame slots D30 forced are M4.
+The ring is built in M2 with the write path. The live view polls it (D95).
 
-**Visibility precedes durability here too.** A subscriber can observe a mutation a crash
+**Visibility precedes durability here too.** A polling client can observe a mutation a crash
 would erase, for the same reason a reader can (see Durability above). Consistent with the
 feed being best-effort.
 

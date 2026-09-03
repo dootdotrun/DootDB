@@ -24,7 +24,7 @@ container orchestration.
   │  I/O worker pool (every storage call — D57)   │
   │  storage engine (04-storage.md)               │
   │  control-plane log + in-RAM image (D40)       │
-  │  change feed ring → SSE                       │
+  │  change feed ring → short poll            │
   │  backup uploader → R2                         │
   │  outbound HTTPS client → ZeptoMail, GitHub    │
   └──────────────────────────────────────────────┘
@@ -249,18 +249,14 @@ per page load, the sign-in page would rate-limit its own users.
   screen, and the response already carries the credit balance, the plan limits and the
   synchroniser token (D90).
 - **Live view on the control plane**, filtered to the session's account from the change feed
-  ring (`04-storage.md`). Two framings on one path, chosen by the client's `Accept` header
-  (D87): SSE, or an immediate JSON batch for a client whose network path buffers streams.
-  A parked stream costs **no additional memory** — it builds frames in the idle read buffer its
-  connection already has and gives its 260 KiB request slot back as soon as the head is written
-  (D84, D86).
-- **The client chooses the transport, on a deadline** (D93). `EventSource` first; if nothing
-  at all arrives within **20 seconds** — not even a heartbeat, which is due at 15 — it
-  closes and polls the same path with `Accept: application/json` for the rest of the page's
-  life. A frame is a notification (D85), so the response is to re-run the current listing,
-  coalesced to at most one refetch in flight and one per 500 ms: the control-plane bucket is
-  300 ops/min, so an uncoalesced refetch would rate-limit the dashboard out of its own live
-  view.
+  ring (`04-storage.md`). One immediate JSON batch per poll — `{"events":[…],"cursor":M,
+  "resync":false}` — with the client's cursor in the query string and the next one in the
+  body, so nothing about a request outlives it (D95).
+- **The client polls every 3 seconds** (D95). A batch is a notification (D85), so the
+  response is to re-run the current listing, coalesced to at most one refetch in flight
+  and one per 500 ms: the control-plane bucket is 300 ops/min, so an uncoalesced refetch
+  would rate-limit the dashboard out of its own live view. At ~20 requests/min the poll
+  cannot do that either.
 - **The explorer lists by tag, and `GET /app/tags` is what tells it which tags exist**
   (D92). Listing requires a tag and nothing else in the tree enumerates them, so this is a
   capability the explorer cannot work without — a filtered scan of the in-RAM `TagHeads`
@@ -268,35 +264,19 @@ per page load, the sign-in page would rate-limit its own users.
 - Rendering keys off the stored `Content-Type`: JSON as a collapsible tree, text as
   text, anything else as a hex/size summary. The server never parses bodies.
 
-### SSE, and the Cloudflare hazard
+### Why the live view polls (D95)
 
-Our side is measured and correct (D18, D30): headers flush immediately with an opening
-comment so the client's stream opens before the first event exists, events arrive at
-exactly the emit interval, and 5,000 concurrent subscribers cost **4.33 KB each
-(21.7 MB)**. Response headers are `Content-Type: text/event-stream`,
-`Cache-Control: no-cache, no-store, no-transform`, `X-Accel-Buffering: no`, no
-`Content-Length`, plus periodic heartbeat comments.
+Push was tried and removed. SSE worked from the origin and broke through the edge:
+Cloudflare buffers `text/event-stream` in ~8 KB batches by default (D68), which at Doot's
+event rate means minutes to hours of lag. Carrying both a stream and a fallback to defend
+push latency meant parked connections, a feed timer, a subscriber table, and a zone
+verification — machinery for a latency the product does not need. So the live view is one
+immediate JSON batch per poll, every 3 seconds, and there is nothing for an intermediary
+to buffer: each poll is an ordinary short response.
 
-**Cloudflare is a live risk to this feature, not a hypothetical one.** Buffering of
-`text/event-stream` has been reported repeatedly across years, and for most of that
-history the only workaround was turning the proxy off. There is now a first-class fix —
-a Configuration Rule setting response body buffering to `none`, available on the Free
-plan — but it must be applied and then *verified*. Full reasoning, the complete zone
-configuration, and the fallback if it fails are in D31.
-
-Two consequences for this document:
-
-- **The heartbeat has a ceiling, not just a purpose.** Cloudflare's proxy read timeout
-  on Free and Pro is 100 seconds; an origin that sends nothing in that window gets a
-  524. Heartbeat interval is therefore **15 seconds**.
-- **Caching is bypassed for all of `/v1` and for the stream path.** A stale read breaks
-  the state-storage use case outright, which is a large part of why anyone would adopt
-  Doot.
-
-`ops/sseprobe.py` is the verification procedure. It is the one artifact that survived the
-deletion of `spikes/` (D49): point it at the live origin and it judges streaming on arrival
-timing rather than content, because a buffering proxy still delivers every event — just late
-and all at once.
+**Caching is bypassed for all of `/v1` and for the stream path.** A stale read breaks
+the state-storage use case outright, which is a large part of why anyone would adopt
+Doot.
 
 ## Outbound calls
 

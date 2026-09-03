@@ -25,9 +25,9 @@ It earned its place. Three things would have gone undetected into later mileston
 buffer silently corrupts frames above ~50 concurrent subscribers; and Cloudflare
 buffering SSE is a known, recurring failure that needs specific zone configuration.
 
-**Not closed:** the Cloudflare half of the SSE question needs the live zone. The probe
-that answers it (`ops/sseprobe.py`) is written and must be run against `doot.run` before
-M4 builds the dashboard on the assumption it streams.
+**Closed by D95, kept as history:** the Cloudflare half of the SSE question was answered
+by measurement (D68: the edge buffers in ~8 KB batches) and the stream was removed rather
+than configured around. The probe (`ops/sseprobe.py`) is deleted with it.
 
 ---
 
@@ -105,7 +105,7 @@ struct copy; and `record.decode` leaving a tag slice aimed at the caller's stack
 The seven endpoints. Product-visible for the first time, on top of the M1 engine.
 
 **Where it stands:** the endpoints are built and verified over HTTP. What remains is the
-origin binary that runs them (D63), the SSE consumer for the D44 ring, the edge, and two
+origin binary that runs them (D63), the live-view consumer for the D44 ring, the edge, and two
 exit conditions that the code can already be measured against.
 
 ### Pass 1 — decisions · **COMPLETE**
@@ -190,24 +190,13 @@ credit balance exactly, a `SIGKILL` restart rewinds it to the last checkpoint �
 D41's accepted crash shape, and the contrast is what shows the shutdown path is load-bearing
 rather than decorative.
 
-### Pass 2 — the live feed · **COMPLETE**
+### Pass 2 — the live feed · **SUPERSEDED by D95**
 
-Decisions D84–D87, with amendments on D68, D86 and D87 — two of which corrected a shape that
-could not have worked. Built:
-
-- a third `Disposition`, a parked connection state, and a head with no `Content-Length`; the
-  request slot goes back to the pool as soon as that head is written, because a 260 KiB slot per
-  viewer would turn D28's fixed ceiling into a per-viewer slope (D84)
-- a 100 ms feed timer armed **only while someone is subscribed**, so a deployment with no
-  dashboard open pays nothing
-- frames as change notifications rather than changes, which is what keeps disk off the loop
-  entirely (D85)
-- subscribers costing **no additional memory**: a parked stream builds frames in the idle read
-  buffer it was never going to read into (D86)
-- both framings on one path, chosen by `Accept`, with the fallback stateless and immediate (D87)
-
-Verified by 132 transport tests and 21 `curl` checks, including `ops/sseprobe.py` — the artifact
-D31 named — run against the real endpoint over loopback.
+Decisions D84–D87 built an SSE live view with a JSON fallback on one path. D95 removed
+the SSE half: `GET /app/stream` now answers one immediate JSON batch and the dashboard
+polls it every 3 seconds. The history is kept — D84–D87 record what was built and why it
+went — but the parked disposition, subscriber table, feed timer, heartbeat constants,
+`ops/sseprobe.py` and the M5 zone-verification run are gone.
 
 ### Pass 2 — the edge
 
@@ -216,20 +205,18 @@ up and the last open M0 question gets closed:
 
 - Origin TLS with a real Cloudflare Origin CA certificate, `Full (strict)`,
   Authenticated Origin Pulls, firewall restricted to Cloudflare ranges
-- The full zone configuration in D31, applied as code rather than console clicks, in `ops/`
-- An SSE endpoint behind the real zone streaming from the D44 ring — real events rather than
-  synthetic ones, which makes the probe measure the production shape — and
-  **`ops/sseprobe.py` run against `doot.run` until it exits zero**
+- The zone configuration in D31, applied as code rather than console clicks, in `ops/`
+  (D95 shrank it: cache bypass on `/v1/*`, `Full (strict)`, Authenticated Origin Pulls,
+  the origin firewall — the stream-path buffering and compression rules went with SSE)
 
 **This half needs infrastructure that does not exist yet**: a domain, a Cloudflare zone, an
 Origin CA certificate and a reachable box. The code can be written and tested without them;
 the verification cannot, and D31's entire point is that unverified is the failure mode. So
 the edge work gates on that infrastructure being real, and everything above it does not.
 
-**The verification run is rescheduled to the end of M5 (D68).** The zone exists and
+**What the tunnel measurement decided (D68, kept as history).** The zone exists and
 `doot.run` is live, but no reachable origin does — so the probe was run through a tunnel
-against a synthetic origin instead, which answered the buffering question and cannot answer
-the production-shape one. What it found:
+against a synthetic origin instead. What it found:
 
 | stream | result |
 |---|---|
@@ -238,16 +225,15 @@ the production-shape one. What it found:
 | through the edge at ~200 KB/s | **eight events all at +945 ms**, one ~8 KB chunk |
 
 So the edge buffers by byte threshold, not by timer, and at Doot's real event rate the live
-view would lag by minutes to hours without the D31 Configuration Rule. A tunnel cannot
-exercise `Full (strict)`, Authenticated Origin Pulls or the origin firewall — with a tunnel
-none of the three exist — so this is recorded as a partial result rather than the condition
-met.
+view would lag by minutes to hours. **D95 took this as the decision rather than the warning:**
+SSE is removed instead of configured around. A tunnel cannot exercise `Full (strict)`,
+Authenticated Origin Pulls or the origin firewall — with a tunnel none of the three exist —
+so those are verified in M5 on the deployed box, where the infrastructure finally exists.
 
 **Exit:** every row of the error table reproducible by a `curl` invocation, held in a
 script that runs in CI. Credits and rate limits verified to be exact under concurrent
-load, not approximately right. **And the SSE probe passes through Cloudflare** — if it
-cannot be made to pass, the live view falls back to long-polling (D31) and that is
-decided here, not during M4.
+load, not approximately right. **Both are met** — there used to be a third (the SSE probe
+through Cloudflare), which D95 deleted along with the stream it would have verified.
 
 **Status of each, measured rather than assumed:**
 
@@ -255,7 +241,6 @@ decided here, not during M4.
 |---|---|
 | every error row reproducible by `curl` in CI | **met — all 25 codes.** D65 settled how each of the last five is reached; `invalid_content_type` is the twenty-fifth, added by D64 |
 | credits and rate limits exact under concurrent load | **met.** Exact partitions under real concurrency, with the rate limit asserted against a stopped clock so no token can refill mid-burst (D66) |
-| SSE probe passes through Cloudflare | **the endpoint is built and passes the probe locally** — `ops/sseprobe.py` judges it streaming at a 269 ms mean gap against a 250 ms emit interval. The run *through the zone* is **rescheduled to the end of M5 (D68)**, where the deployed box and the zone both exist. The buffering question itself is no longer open: measured through a real edge, Cloudflare withholds `text/event-stream` and flushes it in ~8 KB batches, so D31's fix is load-bearing rather than precautionary |
 
 The first two are closed by `tools/exactness-check.sh` (28 checks) plus strengthened
 assertions in the two existing scripts, and cost more than expected: reaching them turned up
@@ -350,17 +335,11 @@ to be measured from outside: a 5 ms "unknown" turned out to be a `429`, not a fa
 
 The adoption driver. Plain HTML/CSS/JS, `@embedFile`d.
 
-**Gate, restated by D68: the live view is written against a transport seam with two
-implementations behind it — SSE and long-polling on the same path — and both are built and
-tested locally.** The original gate was the probe passing through the real zone, which has
-moved to the end of M5; waiting for it would have put M4 after M5, and dropping it would have
-reintroduced exactly the risk D31 named. A seam protects against that risk by making the
-choice reversible at configuration time instead of by waiting.
-
-This is no longer a hedge against something unlikely. The edge's *default* behaviour is
-measured and it breaks SSE (D68), so the fallback sits on the likely branch until the
-Configuration Rule is applied and verified. **The seam itself is already built** (D84–D87):
-`GET /app/stream` serves both framings and the client's `Accept` header picks.
+**Gate, decided by D95: the live view is a short poll.** `GET /app/stream` answers one
+immediate JSON batch and the dashboard polls it every 3 seconds. The earlier gate — a
+transport seam with SSE and long-polling behind it, chosen after a zone verification —
+died with the stream it protected: D68 measured the edge buffering SSE in ~8 KB batches
+and D95 removed SSE instead of configuring around it.
 
 ### Pass 1 — decisions · **COMPLETE**
 
@@ -376,7 +355,7 @@ the two-pass rule earning its keep for the fourth milestone running.
 | D90 | the shell carries **no identity**: one `GET /app/account` is the whole bootstrap, `401` is a state rather than an error, and it is one of only two sources of the synchroniser token |
 | **D91** | the first key is created **only when the account holds none**. "A key is issued on first landing" read literally posts a key per load, which exhausts the five-key cap in five reloads and then greets the user with `409` on their own dashboard |
 | **D92** | `GET /app/tags`, because `GET /v1/entries` requires a tag and **nothing enumerates them**. Control plane only, so `/v1` stays at seven endpoints. It names tags that are *known*, not non-empty, because `TagHeads` is never pruned |
-| D93 | the client asks for SSE and falls back after a **20-second** first-frame deadline; a frame triggers a refetch coalesced to one per 500 ms, because the control-plane bucket is 300 ops/min and an uncoalesced refetch rate-limits the dashboard out of its own live view |
+| D95 | the live view is a short poll: the client polls `GET /app/stream` every **3 seconds** with `?cursor=N`; a non-empty batch triggers a refetch coalesced to one in flight and one per 500 ms, because the control-plane bucket is 300 ops/min and an uncoalesced refetch rate-limits the dashboard out of its own live view |
 | D94 | the exit condition splits: `tools/dashboard-check.sh` asserts the surface in CI, and the 60 seconds is a timed manual drill recorded like every other measured figure |
 
 ### Pass 2 — implementation · **COMPLETE except the timed drill**
@@ -392,13 +371,13 @@ Built and verified over HTTP by `tools/dashboard-check.sh` (58 checks, in CI):
 - **First-run screen: the API key beside a paste-ready `curl` command**, created
   only when the account holds none (D91)
 - Entry explorer: list by tag, read one entry, content-type-aware rendering
-- Live view over the D87 seam, with D93's client-side fallback (SSE first, JSON
-  poll after a 20-second first-frame deadline, sticky for the page)
+- Live view polling `GET /app/stream` every 3 seconds, with D95's refetch coalescing
+  (one in flight, one per 500 ms)
 - Credit counter with the mail-us-for-credits button, refreshed on the live trigger
 
 Drill, loopback, 2026-09-03: the whole mechanical path — shell, signup, verify,
-first key, `PUT getting-started/hello`, explorer listing showing it, live feed
-carrying the `put` frame — in **625 ms** wall clock, timed with `curl` against the
+first key, `PUT getting-started/hello`, explorer listing showing it, live view
+showing it on the next poll — in **625 ms** wall clock, timed with `curl` against the
 `app` harness. That is the machine's share; the remaining budget is human
 reading and typing, which no script can spend. Re-run at the end of M5 on the
 deployed box, where the number finally includes the edge, TLS and a real network.
@@ -425,13 +404,6 @@ best-effort promise is unbacked.
 - `/admin/stats`, structured JSON logs with no bodies, names, keys or codes
 - `systemd` unit, boot-time secret validation
 - Threshold alerting on index utilisation, disk, backup lag, recovery time
-
-**And M2's last exit condition is closed here (D68): `ops/sseprobe.py` run against
-`doot.run` through the real Cloudflare zone until it exits zero.** It lands in M5 because
-this is the milestone that produces a deployed, publicly reachable origin — which is the one
-thing the probe needs and the one thing M2 could not supply. The D31 zone configuration is
-applied as code first, and if the probe still cannot be made to pass, M4's transport seam
-switches to long-polling and that is the decision taken rather than discovered.
 
 The Cloudflare-facing half of `05-architecture.md` is verified in the same pass, because a
 tunnel could not: `Full (strict)`, Authenticated Origin Pulls, and the firewall restricted to
