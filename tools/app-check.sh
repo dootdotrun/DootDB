@@ -258,7 +258,7 @@ equals "the explorer reads one entry" 200 "$(status -b "$COOKIES" "$BASE/app/ent
 equals "and returns the stored bytes" "deadbeef" "$(body -b "$COOKIES" "$BASE/app/entries/ci/last-green")"
 
 # ---------------------------------------------------------------------------
-hdr "the live feed (D84-D87)"
+hdr "the live view (D95)"
 CLIENT_IP="203.0.113.30"
 # ---------------------------------------------------------------------------
 
@@ -273,61 +273,25 @@ OTHER_SYNC="$(printf '%s' "$OTHER_BODY" | json_field synchroniser)"
 OTHER_KEY="$(body -b "$WORK/other_cookies" -X POST "$BASE/app/keys" --data '' \
   -H "X-Doot-Synchroniser: $OTHER_SYNC" | json_field api_key)"
 
-SESSION_COOKIE="$(grep -o '__Host-doot_session[[:space:]]*[^[:space:]]*' "$COOKIES" | awk '{print $2}')"
-
-# The head, before any event exists. A stream that only opened once it had something to say
-# would leave the dashboard unable to tell "connected and quiet" from "not connected".
-STREAM_HEAD="$(curl -sS -D- -o /dev/null --max-time 3 \
-  -H "CF-Connecting-IP: $CLIENT_IP" \
-  -H "Cookie: __Host-doot_session=$SESSION_COOKIE" \
-  -H 'Accept: text/event-stream' "$BASE/app/stream" 2>/dev/null || true)"
-contains "the stream answers text/event-stream" "text/event-stream" "$STREAM_HEAD"
-# The omission is the framing (D84): a body that is not finished has no length to announce.
-lacks "and declares no Content-Length" "Content-Length" "$STREAM_HEAD"
-lacks "and is not chunked either" "Transfer-Encoding" "$STREAM_HEAD"
-contains "and asks intermediaries not to transform it" "no-transform" "$STREAM_HEAD"
-contains "and sets X-Accel-Buffering" "X-Accel-Buffering: no" "$STREAM_HEAD"
-
-equals "the stream needs a session, like every other /app route" 401 \
-  "$(status -H 'Accept: text/event-stream' "$BASE/app/stream")"
-equals "a write to the stream is 405" 405 \
+equals "the live view needs a session, like every other /app route" 401 \
+  "$(status "$BASE/app/stream")"
+equals "a write to the live view is 405" 405 \
   "$(status -X POST "$BASE/app/stream" --data '')"
 
-# ---- SSE, judged by ops/sseprobe.py: the artifact D31 named as the verification procedure ----
-#
-# Run against the local origin here. That is D68's "both are built and tested locally" -- the
-# run *through Cloudflare* is what moved to the end of M5, and it needs a reachable box.
-( for i in $(seq 1 12); do
-    sleep 0.25
-    curl -sS -o /dev/null -H "Authorization: Bearer $FRESH" \
-      -X PUT "$BASE/v1/entries/live/tick-$i" --data-binary "$i" 2>/dev/null || true
-  done ) &
-WRITER=$!
-
-if python3 ops/sseprobe.py "$BASE/app/stream" \
-     --expect-interval 250 --events 4 --timeout 20 \
-     --header "Cookie: __Host-doot_session=$SESSION_COOKIE" >"$WORK/probe.out" 2>&1; then
-  pass "ops/sseprobe.py judges the local stream as streaming, not buffered"
-else
-  fail "ops/sseprobe.py judges the local stream as streaming, not buffered" "$(tail -12 "$WORK/probe.out")"
-fi
-wait "$WRITER" 2>/dev/null || true
-sed -n 's/^/        /p' "$WORK/probe.out" | grep -E "mean inter-event|first event|frames:" || true
-
-# ---- the other framing on the same path (D87) ----
+# ---- the live view (D95) ----
 #
 # Stateless and immediate: the client's cursor goes in the query string and the next one comes
-# back in the body. Nothing about the request outlives it, which is what stops the fallback
+# back in the body. Nothing about the request outlives it, which is what stops the live view
 # spending the data plane's concurrency budget.
 
-POLL_ONE="$(body -b "$COOKIES" -H 'Accept: application/json' "$BASE/app/stream")"
-contains "the same path answers JSON when JSON is asked for" '"events"' "$POLL_ONE"
+POLL_ONE="$(body -b "$COOKIES" "$BASE/app/stream")"
+contains "the live view answers a JSON batch" '"events"' "$POLL_ONE"
 contains "and carries a cursor to ask from next" '"cursor"' "$POLL_ONE"
 contains "and reports whether the client was lapped" '"resync"' "$POLL_ONE"
 CURSOR="$(printf '%s' "$POLL_ONE" | grep -o '"cursor":[0-9]*' | cut -d: -f2)"
 [ -n "$CURSOR" ] && pass "the cursor is a number" || fail "the cursor is a number" "$POLL_ONE"
 
-# It answers at once rather than waiting, which is the whole point of the amendment.
+# It answers at once rather than waiting, which is the whole point (D95).
 POLL_START=$(date +%s)
 _="$(body -b "$COOKIES" -H 'Accept: application/json' "$BASE/app/stream?cursor=$CURSOR")"
 POLL_ELAPSED=$(( $(date +%s) - POLL_START ))

@@ -1,7 +1,7 @@
 //! Canonical transport constants.
 //!
-//! Mirrors the tables and prose in `docs/05-architecture.md` — the process model, the
-//! "HTTP behaviour that actually matters" list, and the SSE section. `src/storage/config.zig`
+//! Mirrors the tables and prose in `docs/05-architecture.md` — the process model and the
+//! "HTTP behaviour that actually matters" list. `src/storage/config.zig`
 //! is the same thing for the engine; between them nothing else in the tree may hardcode a
 //! limit (`docs/README.md`, working rule 2).
 //!

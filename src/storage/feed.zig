@@ -14,9 +14,8 @@
 //!
 //! **What it deliberately is not.** The engine holds no subscriber registry, no
 //! callbacks and no notion of who is listening. Reading is a cursor-based poll: a
-//! consumer asks for everything after a position it has already seen. Subscriber
-//! fan-out, SSE framing and the refcounted frame slots D30 forced all belong to the
-//! layer above.
+//! consumer asks for everything after a position it has already seen. Per-account
+//! filtering happens in the layer above, which polls the ring on the client's behalf.
 //!
 //! **Best-effort, by design.** The feed drives a UI, not a guarantee (D18). A
 //! consumer that falls far enough behind to be lapped is told to resync rather than
