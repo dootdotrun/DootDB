@@ -46,25 +46,70 @@ const entries_prefix = "/v1/entries/";
 /// The control plane's prefix (`06-auth.md`).
 pub const control_prefix = "/app/";
 
-/// Which plane a path belongs to, decided before any credential is looked at (D73).
+/// Which plane a path belongs to, decided before any credential is looked at (D73, D88).
 ///
-/// The split has to come first because the two planes authenticate differently and there is
-/// no credential to check until the plane is known: `/v1` reads `Authorization` and never a
-/// cookie, `/app` reads the session cookie and never a bearer token. That asymmetry is what
-/// removes CSRF from the data plane entirely, and it is enforced here by construction rather
-/// than by each handler remembering.
+/// The split has to come first because the three planes authenticate differently and there
+/// is no credential to check until the plane is known: `/v1` reads `Authorization` and
+/// never a cookie, `/app` reads the session cookie and never a bearer token, and the
+/// documents authenticate with nothing — a sign-in screen that needs a session in order
+/// to load cannot be reached. The document plane is a **fixed table of exact paths**,
+/// not a prefix, so traversal is unrepresentable rather than validated.
 ///
-/// Anything outside both prefixes is treated as the data plane, where `route` answers
+/// Anything outside all three is treated as the data plane, where `route` answers
 /// `unrouted` and the request becomes a `404` — the same code a missing entry gets, so an
 /// unauthenticated prober learns nothing (D52).
-pub const Plane = enum { data, control };
+pub const Plane = enum { data, control, document };
+
+/// Every path the document plane serves, exactly (D88).
+///
+/// Enumerable on purpose: the whole plane is a table, so a test can assert the serving
+/// properties of each row rather than of whichever handler was remembered.
+pub const document_paths: []const []const u8 = &.{
+    "/",
+    "/app",
+    "/favicon.ico",
+    "/robots.txt",
+    "/favicon.svg",
+};
 
 pub fn plane(path: []const u8) Plane {
-    // Exactly `/app` with nothing after it is not the control plane: there is no such
-    // endpoint, and treating it as one would mean answering it with a control-plane error
-    // shape rather than the 404 every other unknown path gets.
+    for (document_paths) |p| {
+        if (std.mem.eql(u8, path, p)) return .document;
+    }
+    // Digest-bearing asset paths (`/app.<digest>.css`, `/app.<digest>.js`) are exact
+    // paths too, but their literal text depends on the binary's own digest, which this
+    // module cannot know. The documents module owns that match.
+    if (isAssetPath(path)) return .document;
+    // Exactly `/app` with nothing after it used to fall through to the data plane (D73);
+    // D88 made it the dashboard shell. It now matches the table above, so this comment
+    // is the record of the change rather than a live rule.
     if (std.mem.startsWith(u8, path, control_prefix)) return .control;
     return .data;
+}
+
+/// True for `/app.<12 hex>.css` and `/app.<12 hex>.js` — the digest-bearing asset
+/// paths (D89). Shape-checked, not digest-checked: the digest is the documents
+/// module's to verify, because only it knows what the binary computed.
+fn isAssetPath(path: []const u8) bool {
+    const suffixes: []const []const u8 = &.{ ".css", ".js" };
+    for (suffixes) |suffix| {
+        if (!std.mem.endsWith(u8, path, suffix)) continue;
+        // "/app." + 12 hex + suffix.
+        const want = "/app.".len + 12 + suffix.len;
+        if (path.len != want) continue;
+        if (!std.mem.startsWith(u8, path, "/app.")) continue;
+        const hex = path["/app.".len..][0..12];
+        var ok = true;
+        for (hex) |c| {
+            const h = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f');
+            if (!h) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) return true;
+    }
+    return false;
 }
 
 /// The control plane's surface (`06-auth.md`).
@@ -108,6 +153,13 @@ pub const AppRoute = union(enum) {
     /// `GET /app/entries` · `GET /app/entries/{name}` — the read-only explorer.
     entries,
     entry: []const u8,
+
+    /// `GET /app/tags` — the tags this account has written (D92, `06-auth.md`).
+    ///
+    /// Control plane only, so `/v1` stays at seven endpoints. The explorer lists by tag
+    /// and nothing else enumerates them, so without this the explorer is a text box
+    /// asking the user to remember what they tagged things.
+    tags,
 
     /// `GET /app/stream` — the live feed.
     ///
@@ -158,6 +210,7 @@ pub fn needsSynchroniser(r: AppRoute) bool {
         .keys,
         .entries,
         .entry,
+        .tags,
         .stream,
         .wrong_method,
         .unrouted,
@@ -225,6 +278,9 @@ pub fn routeApp(method: Method, path: []const u8) AppRoute {
     }
     if (std.mem.eql(u8, path, "/app/stream")) {
         return if (method == .get) .stream else .{ .wrong_method = "GET" };
+    }
+    if (std.mem.eql(u8, path, "/app/tags")) {
+        return if (method == .get) .tags else .{ .wrong_method = "GET" };
     }
     if (std.mem.eql(u8, path, "/app/entries")) {
         return if (method == .get) .entries else .{ .wrong_method = "GET" };
@@ -360,13 +416,45 @@ test "the plane is decided by prefix, before any credential is read" {
 
     try testing.expectEqual(Plane.data, plane("/v1/entries"));
     try testing.expectEqual(Plane.data, plane("/healthz"));
-    try testing.expectEqual(Plane.data, plane("/"));
-    // Exactly `/app` is not the control plane: there is no such endpoint, and treating it
-    // as one would answer it in the control plane's error shape instead of the 404 every
-    // other unknown path gets.
-    try testing.expectEqual(Plane.data, plane("/app"));
     // Nor is a path that merely starts with the letters.
     try testing.expectEqual(Plane.data, plane("/application/x"));
+}
+
+test "the document plane is a fixed table of exact paths (D88)" {
+    // Every row the table names, including the shell that used to fall to the data
+    // plane (D73) and answer 401. A 401 on the dashboard's own front door would be
+    // the bug this plane exists to remove.
+    for (document_paths) |p| {
+        try testing.expectEqual(Plane.document, plane(p));
+    }
+    try testing.expectEqual(Plane.document, plane("/"));
+    try testing.expectEqual(Plane.document, plane("/app"));
+
+    // Near-misses stay out: exact means exact. `/app/` itself is control-plane
+    // shaped (it matches the prefix) and unrouted there — not a document.
+    try testing.expectEqual(Plane.control, plane("/app/"));
+    try testing.expectEqual(Plane.data, plane("//app"));
+    try testing.expectEqual(Plane.data, plane("/appx"));
+    try testing.expectEqual(Plane.data, plane("/robots.txt/"));
+    try testing.expectEqual(Plane.data, plane("/ROBOTS.TXT"));
+
+    // The whole plane is enumerable, so this asserts it has exactly the rows D88
+    // names — a row added or lost here is a deliberate diff, not a silent one.
+    try testing.expectEqual(@as(usize, 5), document_paths.len);
+}
+
+test "digest-bearing asset paths are documents by shape (D89)" {
+    try testing.expectEqual(Plane.document, plane("/app.0123456789ab.css"));
+    try testing.expectEqual(Plane.document, plane("/app.abcdefabcdef.js"));
+
+    // Shape, not substance: the digest itself is the documents module's to check.
+    try testing.expectEqual(Plane.data, plane("/app.0123456789ab.txt"));
+    try testing.expectEqual(Plane.data, plane("/app.0123456789ab.CSS"));
+    try testing.expectEqual(Plane.data, plane("/app.0123456789a.css")); // 11 hex
+    try testing.expectEqual(Plane.data, plane("/app.0123456789abc.css")); // 13 hex
+    try testing.expectEqual(Plane.data, plane("/app.0123456789ag.css")); // not hex
+    try testing.expectEqual(Plane.data, plane("/app..css"));
+    try testing.expectEqual(Plane.data, plane("/app.css"));
 }
 
 test "every route in 06-auth.md's control-plane table exists" {
@@ -383,6 +471,9 @@ test "every route in 06-auth.md's control-plane table exists" {
     try testing.expectEqual(AppRoute.keys_create, routeApp(.post, "/app/keys"));
     try testing.expectEqualStrings("key_0000003", routeApp(.delete, "/app/keys/key_0000003").key_revoke);
     try testing.expectEqual(AppRoute.stream, routeApp(.get, "/app/stream"));
+    try testing.expectEqual(AppRoute.tags, routeApp(.get, "/app/tags"));
+    try testing.expectEqualStrings("GET", routeApp(.post, "/app/tags").wrong_method);
+    try testing.expectEqualStrings("GET", routeApp(.delete, "/app/tags").wrong_method);
     try testing.expectEqual(AppRoute.entries, routeApp(.get, "/app/entries"));
     try testing.expectEqualStrings("ci/last-green", routeApp(.get, "/app/entries/ci/last-green").entry);
 }
@@ -442,6 +533,7 @@ test "every Allow the control plane advertises is a method that routes" {
         .{ "/app/entries", "GET" },
         .{ "/app/entries/a", "GET" },
         .{ "/app/stream", "GET" },
+        .{ "/app/tags", "GET" },
     }) |case| {
         var it = std.mem.splitSequence(u8, case[1], ", ");
         while (it.next()) |m| {
@@ -498,12 +590,14 @@ test "the synchroniser token covers exactly the state-changing routes" {
     try testing.expect(!needsSynchroniser(.account));
     try testing.expect(!needsSynchroniser(.keys));
     try testing.expect(!needsSynchroniser(.entries));
+    try testing.expect(!needsSynchroniser(.tags));
 }
 
 test "the two planes never answer for each other's paths" {
     // The separation 06-auth.md requires, asserted rather than assumed: a control-plane
     // path is not a data-plane route, and the reverse.
     try testing.expectEqual(Route.unrouted, route(.get, "/app/account"));
+    try testing.expectEqual(Route.unrouted, route(.get, "/app/tags"));
     try testing.expectEqual(Route.unrouted, route(.post, "/app/auth/login"));
     try testing.expectEqual(AppRoute.unrouted, routeApp(.get, "/v1/entries"));
     try testing.expectEqual(AppRoute.unrouted, routeApp(.get, "/healthz"));
