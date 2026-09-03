@@ -396,8 +396,12 @@ Built and verified over HTTP by `tools/dashboard-check.sh` (58 checks, in CI):
   poll after a 20-second first-frame deadline, sticky for the page)
 - Credit counter with the mail-us-for-credits button, refreshed on the live trigger
 
-Outstanding: the 60-second timed manual drill on a cold browser (D94) — over
-loopback at M4's close, and again at the end of M5 on the deployed box.
+Drill, loopback, 2026-09-03: the whole mechanical path — shell, signup, verify,
+first key, `PUT getting-started/hello`, explorer listing showing it, live feed
+carrying the `put` frame — in **625 ms** wall clock, timed with `curl` against the
+`app` harness. That is the machine's share; the remaining budget is human
+reading and typing, which no script can spend. Re-run at the end of M5 on the
+deployed box, where the number finally includes the edge, TLS and a real network.
 
 **Exit:** a new user goes from landing page to a written entry visible in the live view in
 **under 60 seconds**, timed, on a cold browser. This is the product thesis and it is a
