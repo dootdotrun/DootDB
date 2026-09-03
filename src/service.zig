@@ -152,13 +152,15 @@ pub const Service = struct {
         const self: *Service = @ptrCast(@alignCast(ctx));
         const path = in.path();
 
-        // The plane split, before any credential is looked at (D73).
+        // The plane split, before any credential is looked at (D73, D88).
         //
-        // It has to come first because the two planes authenticate differently and there is
-        // nothing to check until the plane is known: `/v1` reads `Authorization` and never a
-        // cookie, `/app` reads the session cookie and never a bearer token. That asymmetry
-        // is what removes CSRF from the data plane entirely.
+        // It has to come first because the three planes authenticate differently and there
+        // is nothing to check until the plane is known: `/v1` reads `Authorization` and
+        // never a cookie, `/app` reads the session cookie and never a bearer token, and
+        // documents authenticate with nothing. That asymmetry is what removes CSRF from
+        // the data plane entirely.
         if (router.plane(path) == .control) return self.respondControl(in, out);
+        if (router.plane(path) == .document) return self.respondDocument(in, out);
 
         // `/healthz` is outside authentication and outside the meter, and is the only
         // endpoint that is (`02-api.md`). Handled before anything else so a liveness
@@ -224,6 +226,56 @@ pub const Service = struct {
 
         out.header("Content-Type", "application/json");
         out.body = out.dupe(w.done()) orelse return out.fail(.internal_error);
+    }
+
+    // -----------------------------------------------------------------------
+    // The document plane (D88, D89)
+    // -----------------------------------------------------------------------
+
+    /// Static bytes with no credential, no meter and no store call.
+    ///
+    /// Gated on the same `app != null` boundary as the control plane: the dashboard is
+    /// the control plane's front end, so a shell whose every API call answers 404 is a
+    /// broken page rather than a thing that stands on its own. On a data-plane-only
+    /// instance this falls through to the data plane exactly as before D88.
+    ///
+    /// Entirely on the loop. The bodies are comptime bytes (`.rodata`) and the only
+    /// per-request work is substituting the digest into the two HTML documents, which
+    /// is a small memcpy into `out.out` — the slot's tail, which is empty on a GET.
+    fn respondDocument(self: *Service, in: Incoming, out: *Reply) Disposition {
+        if (self.app == null) return failPlain(out, .not_found);
+        if (in.method() != .get) {
+            // Read-only, like the explorer: a second answer would be a second surface.
+            return fail(out, .method_not_allowed, "GET");
+        }
+        const served = documents.serve(in.path());
+        if (served.favicon_ico) return failPlain(out, .not_found);
+        const doc = served.doc orelse return failPlain(out, .not_found);
+
+        out.header("Content-Type", doc.content_type);
+        if (doc.cache) |cc| out.header("Cache-Control", cc);
+        if (doc.security) {
+            out.header("Content-Security-Policy", documents.csp);
+            out.header("X-Content-Type-Options", "nosniff");
+            out.header("Referrer-Policy", "no-referrer");
+        }
+        if (std.mem.indexOf(u8, doc.body, documents.token) != null) {
+            // An HTML document: substitute the digest. `renderHtml` is generic over the
+            // source, so the branch serves whichever document was matched; `out.out`
+            // holds it because a GET has no request body competing for the slot's tail.
+            if (std.mem.eql(u8, in.path(), "/")) {
+                const rendered = documents.renderHtml(documents.landing_html);
+                @memcpy(out.out[0..rendered.len], &rendered);
+                out.body = out.out[0..rendered.len];
+            } else {
+                const rendered = documents.renderHtml(documents.shell_html);
+                @memcpy(out.out[0..rendered.len], &rendered);
+                out.body = out.out[0..rendered.len];
+            }
+        } else {
+            out.body = doc.body;
+        }
+        return .complete;
     }
 
     // -----------------------------------------------------------------------
@@ -315,6 +367,7 @@ pub const Service = struct {
             // implementation is the divergence `00-vision.md` made it read-only to prevent.
             .entries => self.beginList(in, out, self.sessionAsAuth(session)),
             .entry => |raw| self.beginEntry(out, self.sessionAsAuth(session), raw, .read),
+            .tags => self.beginTags(out, session),
             .stream => self.beginStream(in, out, session),
             else => failPlain(out, .internal_error),
         };
@@ -1668,6 +1721,55 @@ pub const Service = struct {
         out.header("Idempotency-Replayed", "true");
         out.body = rendered;
         return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // GET /app/tags
+    // -----------------------------------------------------------------------
+
+    /// The tags this account has written (`06-auth.md`, D92).
+    ///
+    /// Runs on an I/O worker like every other engine call (D57) — the established
+    /// pattern, avoiding an argument about holding the engine's tag mutex on the loop.
+    /// The scan itself is a filtered in-RAM pass: no disk, no traversal. The response
+    /// caps at 200 with `"truncated": true`, in unspecified order; the client sorts
+    /// the page it received.
+    fn beginTags(self: *Service, out: *Reply, s: Session) Disposition {
+        _ = self;
+        const work = out.workCtx(TagsWork);
+        work.* = .{ .account_id = s.auth.account_id };
+        out.work = tagsWork;
+        return .deferred;
+    }
+
+    const TagsWork = struct {
+        account_id: u32,
+    };
+
+    /// `06-auth.md`'s bound, mirrored here so the renderer and the decision agree.
+    const max_tags_page: usize = 200;
+
+    fn tagsWork(ctx: *anyopaque, _: Incoming, out: *Reply) void {
+        const self: *Service = @ptrCast(@alignCast(ctx));
+        const work = out.workCtx(TagsWork);
+
+        var slots: [max_tags_page][]const u8 = undefined;
+        const got = self.store.listTags(work.account_id, &slots);
+
+        var w = json.Writer.init(out.out);
+        w.beginObject() catch return out.fail(.internal_error);
+        w.key("tags") catch return out.fail(.internal_error);
+        w.beginArray() catch return out.fail(.internal_error);
+        for (slots[0..got.count]) |t| {
+            w.string(t) catch return out.fail(.internal_error);
+        }
+        w.endArray() catch return out.fail(.internal_error);
+        w.key("truncated") catch return out.fail(.internal_error);
+        w.boolean(got.truncated) catch return out.fail(.internal_error);
+        w.endObject() catch return out.fail(.internal_error);
+
+        out.header("Content-Type", "application/json");
+        out.body = w.done();
     }
 
     // -----------------------------------------------------------------------
