@@ -199,7 +199,7 @@ Two directories outside `docs/` are permanent:
 
 | | |
 |---|---|
-| [`toolchain/`](toolchain/) | pinned Zig version, hash, and the stdlib patch it requires. `toolchain/setup.sh` builds the environment from scratch |
+| [`toolchain/`](toolchain/) | pinned Zig version and hash. `toolchain/setup.sh` builds the environment from scratch |
 | [`tools/`](tools/) | the M1 exit-condition harness and its crash subject, the transport and data-plane harnesses with the `curl` check scripts that drive them, the origin binary's boot and shutdown checks, and the vocabulary check |
 
 `spikes/` held the M0 validation code and was deleted at M1 as always intended. The findings
