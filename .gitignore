@@ -1,0 +1,7 @@
+# Zig build output
+.zig-cache/
+zig-cache/
+zig-out/
+
+# M1 harness scratch directories
+/tmp/doot_*

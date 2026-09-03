@@ -1,0 +1,122 @@
+# Enforces what the decisions already claim is enforced (docs/07-decisions.md D50).
+#
+# D3 and 05-architecture.md both say the Zig toolchain pin is "enforced in CI". D2 says
+# the vocabulary rule is enforced "in code identifiers, endpoints, error messages, log
+# lines, docs and UI copy". Until this file existed, neither was true anywhere.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap and toolchain-free, so it fails in seconds rather than after a Zig build.
+  vocabulary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: D2 vocabulary rule
+        run: tools/vocab-check.sh
+
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keyed on zig.lock, so a reviewed toolchain upgrade invalidates the cache and an
+      # unreviewed one cannot slip through on a stale hit.
+      - name: Cache pinned toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: zig-${{ hashFiles('toolchain/zig.lock') }}
+
+      # This step *is* the pin enforcement (D3, D26): setup.sh verifies the tarball
+      # SHA-256, refuses to patch a tree it does not recognise, and proves the result by
+      # compiling and running a program that uses the ring. Idempotent, so a cache hit
+      # still re-checks the patch.
+      - name: Install and verify toolchain
+        run: |
+          toolchain/setup.sh "$HOME/toolchain"
+          echo "$HOME/toolchain/zig" >> "$GITHUB_PATH"
+
+      - name: Toolchain matches the pin
+        run: |
+          set -euo pipefail
+          source toolchain/zig.lock
+          actual="$(zig version)"
+          echo "pinned=$ZIG_VERSION actual=$actual"
+          [ "$actual" = "$ZIG_VERSION" ]
+
+      - name: Unit tests
+        run: zig build test --summary all
+
+      - name: Build the exit-condition harnesses
+        run: zig build verify
+
+      # Run on tmpfs deliberately. The harness is single-threaded, so every write becomes
+      # its own flush leader and pays a full fsync with nobody to piggyback — ~41,000
+      # writes/s on tmpfs against ~200 on a persistent volume (D48). On disk the recovery
+      # check's write phase would dominate the job by orders of magnitude. This measures
+      # correctness, not throughput, so the mount is free to be fast.
+      - name: M1 exit conditions
+        run: |
+          set -euo pipefail
+          df -h /dev/shm
+          mkdir -p /dev/shm/doot-m1
+          ./zig-out/bin/m1 all /dev/shm/doot-m1
+
+      # The transport's own tests run inside `zig build test` against a client written
+      # alongside it, so both sides can share a misunderstanding and still agree. This
+      # step points `curl` at it instead — a client that decides for itself whether our
+      # framing, connection reuse and `Expect: 100-continue` handling are correct.
+      - name: M2 transport checks
+        run: tools/transport-check.sh
+
+      # All seven endpoints over a real store and a real control log, driven by `curl`
+      # rather than by a client of our own — including credits, idempotency and the
+      # documented write-validation order. Fixture entries are seeded through the engine,
+      # which keeps the read, list, delete and isolation checks independent of whether the
+      # write path is correct.
+      - name: M2 data-plane checks
+        run: tools/dataplane-check.sh
+
+      # The origin binary, run rather than merely compiled. `src/boot.zig` has unit tests
+      # for the parsing and the maintenance cadence; what they cannot cover is the
+      # composition, which is one function whose behaviour *is* the wiring. This asserts
+      # the three D63 claims that would otherwise rot silently: it refuses to start naming
+      # the variable at fault, SIGTERM exits zero with credits checkpointed, and the
+      # maintenance thread is what produces a snapshot.
+      #
+      # The slowest step in the tree, deliberately: the maintenance interval is a compiled
+      # constant (D45), so waiting for a pass is waiting in real time.
+      - name: M2 origin binary checks
+        run: tools/boot-check.sh
+
+      # M2's two remaining exit conditions, which each need a harness configured differently
+      # from the one the data-plane checks drive: an index budget small enough that admission
+      # control is already closed, and a stopped clock so the rate limit's refill cannot make
+      # a burst assertion approximate (D65, D66).
+      #
+      # Includes the idempotency race, which is a scheduling outcome rather than a property.
+      # Per D53 the correctness half is asserted on every attempt and only the observation is
+      # retried, so this is not a source of intermittent red.
+      - name: M2 exactness checks
+        run: tools/exactness-check.sh
+
+      # M3's control plane, driven by `curl`. The one substitution is the mail transport: a
+      # verification code goes to a real inbox and a check script has none, so the harness
+      # prints what it would have sent. Everything else is production code -- the same
+      # handlers, the same Argon2id, the same rate limiters.
+      #
+      # It carries the half of D75 no unit test can assert: that an unknown address costs the
+      # same as a known one. That is only observable from outside the process, and the band is
+      # deliberately wide because a tight timing assertion on shared CI hardware is D53's
+      # flaky-by-construction shape.
+      - name: M3 control-plane checks
+        run: tools/app-check.sh
