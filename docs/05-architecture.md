@@ -104,7 +104,7 @@ scheduled.
 
 ## Concurrency
 
-Zig **0.16.0**, pinned, with the stdlib patch from `toolchain/`. io_uring driven
+Zig **0.16.0**, pinned. io_uring driven
 **directly** via `std.os.linux.IoUring` — not through `std.Io`, which cannot do it on
 this toolchain (D26, D27).
 

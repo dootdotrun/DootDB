@@ -465,6 +465,14 @@ announced patch release.
 A patched compiler is a real maintenance cost, accepted deliberately: it is
 deterministic, auditable, two lines, and removable the moment upstream ships a fix.
 
+**Amendment — patch removed.** D27 rejected `std.Io.Uring` at M0 and nothing in the tree
+ever called `Uring.io()` — the server drives `std.os.linux.IoUring` directly, and the
+`std.Io.Threaded` uses (outbound HTTPS, Argon2id) never touch `Uring.zig`. Verified by
+reverting the patch and building: `std.Io.Threaded` compiles and runs, the full repo
+build passes, and only a `std.Io.Uring.io()` caller fails. So the patch, its `patches/`
+directory, the applier in `setup.sh`, and the Uring self-test are deleted; the self-test
+now proves `std.Io.Threaded` instead. The pin itself stays: 0.16.0 is enough to run this.
+
 ---
 
 ## D27 — Drive io_uring directly, not through `std.Io` · locked
@@ -4043,7 +4051,7 @@ paid on every future change to the transport whether or not the edge ever gets c
 | Teams and shared accounts | paid single-user retention proving out first |
 | In-house TLS 1.3 server | vendored library becoming a maintenance problem, or wanting the dependency count at zero (D13, D29) |
 | HTTP/2 at the origin | only if the edge stops being the sole client (D13) |
-| Removing the toolchain patch | upstream fixing the 0.16.x `std.Io.Uring` error sets, or a 0.16.1 release (D26) |
+| Removing the toolchain pin | a Zig release worth moving to on its own merits. The patch itself is already gone (D26 amendment): nothing in the tree calls `Uring.io()` |
 | Power-loss durability testing | a deployment target where `dm-flakey` or a VM power cut is available. Until then the gap in D36 stands stated |
 | Parallelising the write path | measurement showing the single write lock is a bottleneck. At 0.03% of request cost this is far off (D35) |
 | A user-space staging buffer for appends | measurement showing syscall count on the write path matters (D34) |
