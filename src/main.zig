@@ -157,15 +157,6 @@ pub fn main(init: std.process.Init) !u8 {
     defer emails.deinit();
     emails.rebuild(ctl);
 
-    // Tens of kilobytes, and the frame buffers cost nothing: a parked stream builds frames in
-    // the idle read buffer it already has (D86).
-    const subs = gpa.create(service.app.Subscribers) catch |err| {
-        boot.fatalError("subscriber table", err);
-        return 1;
-    };
-    defer gpa.destroy(subs);
-    subs.* = .{};
-
     var app_state: service.app.State = .{
         .gpa = gpa,
         .cfg = .{
@@ -180,7 +171,6 @@ pub fn main(init: std.process.Init) !u8 {
         .dummy = dummy,
         .queue = queue,
         .emails = emails,
-        .subscribers = subs,
     };
 
     var svc = service.Service.init(.{
@@ -212,7 +202,6 @@ pub fn main(init: std.process.Init) !u8 {
     const loop = server.Loop.init(gpa, .{
         .address = cfg.listen_addr,
         .handler = svc.handler(),
-        .stream = svc.streamSeam(),
         .clock = clk,
         .tick = maint.tick(),
     }) catch |err| {

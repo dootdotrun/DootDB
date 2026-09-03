@@ -14,9 +14,8 @@
 #     synchroniser token (the bootstrap contract D90 rests on);
 #   - GET /app/tags returns this account's tags, never another's, and reports
 #     truncation;
-#   - GET /app/stream answers immediately with a cursor under Accept:
-#     application/json, and opens a stream under Accept: text/event-stream (both
-#     branches of D93's fallback, from outside);
+#   - GET /app/stream answers immediately with a JSON batch carrying events,
+#     a cursor and a resync flag (D95);
 #   - a write through /v1 appears in a subsequent /app/entries listing for its tag
 #     (the server half of the conversion moment).
 #
@@ -240,17 +239,14 @@ equals "a write to the tag list is 405" 405 \
   "$(status -b "$COOKIES" -X POST "$BASE/app/tags" --data '')"
 
 # ---------------------------------------------------------------------------
-hdr "both live-view framings answer from outside (D93)"
+hdr "the live view answers from outside (D95)"
 # ---------------------------------------------------------------------------
 CLIENT_IP="203.0.113.4"
 
-POLL_ONE="$(body -b "$COOKIES" -H 'Accept: application/json' "$BASE/app/stream")"
-contains "the same path answers JSON when JSON is asked for" '"events"' "$POLL_ONE"
+POLL_ONE="$(body -b "$COOKIES" "$BASE/app/stream")"
+contains "the live view answers a JSON batch" '"events"' "$POLL_ONE"
 contains "and carries a cursor to ask from next" '"cursor"' "$POLL_ONE"
-
-STREAM_HEAD="$(curl -sS -D- -o /dev/null --max-time 3 -b "$COOKIES" \
-  -H 'Accept: text/event-stream' "$BASE/app/stream" 2>/dev/null || true)"
-contains "and opens a stream when SSE is asked for" "text/event-stream" "$STREAM_HEAD"
+contains "and reports whether the client was lapped" '"resync"' "$POLL_ONE"
 
 # ---------------------------------------------------------------------------
 hdr "a /v1 write appears in the explorer listing (D94)"

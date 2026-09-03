@@ -3993,6 +3993,44 @@ discovering it with nothing left to cut.
 
 ---
 
+## D95 — The live view is a short poll; SSE is removed · locked
+
+D68 measured the default edge buffering SSE in ~8 KB batches and answered with a seam: SSE
+plus a JSON fallback, client-chosen. Operating that seam meant carrying both halves — parked
+connections, a feed timer, a subscriber table, heartbeat/interval constants, session-revoked-
+while-parked handling, an SSE probe in CI, and a zone verification in M5 — to defend a push
+latency the product does not need.
+
+Resolution: **the JSON batch is the live view.** `GET /app/stream` answers one immediate
+batch — `{"events":[{"seq":N,"op":"put"}],"cursor":M,"resync":false}` — and the dashboard
+polls it every 3 seconds. D84 (parked disposition), D86 (subscriber table) and D87 (two
+framings) are superseded; D85 (a batch is a notification, not the change) stands unchanged
+and is now the whole design rather than the cheap half of it. D93's SSE-first client with its
+20-second deadline is replaced by `pollLoop` with the same 500 ms / one-in-flight refetch
+coalescing, kept because the control-plane bucket is still 300 ops/min.
+
+What goes: `Disposition.streaming`, the `Stream` seam, `Conn.State.streaming` and its token
+fields, the loop's feed timer and subscriber count, `heartbeat_interval_s`,
+`feed_interval_ms`, `max_subscribers`, `ops/sseprobe.py`, and the M5 zone-verification exit
+condition. The D31 zone configuration shrinks to what the product still needs — cache bypass
+on `/v1/*`, `Full (strict)`, Authenticated Origin Pulls, the origin firewall — with the
+stream-path buffering and compression rules deleted alongside the stream they protected.
+
+Accepted cost: push becomes a 3-second poll. At ~20 requests/min against the 300/min
+control-plane bucket the live view cannot rate-limit itself out of existence, and the "write
+and the dashboard update are visibly simultaneous" promise becomes "within a few seconds",
+which is what a beta-labelled live explorer needs rather than what a demo needs.
+
+Rejected: **long-polling.** D87's amendment already showed why: a held reply keeps its
+260 KiB request slot, so 256 dashboards on the fallback would starve `/v1`. The poll answers
+at once for the same reason.
+
+Rejected: **keeping SSE behind the seam now that both halves work locally.** Working locally
+was never the question — D68 measured the breakage on the real edge, and the seam's price is
+paid on every future change to the transport whether or not the edge ever gets configured.
+
+---
+
 ## Deferred
 
 | item | trigger to reopen |
@@ -4012,7 +4050,7 @@ discovering it with nothing left to cut.
 | Implementing the segment compactor | a segment actually meeting the escape-hatch trigger in production. Over a 24 h soak none did (D10) |
 | Widening the index slot to carry `seq` | a need to arbitrate replay order without the class merge. Would cost 8 B/entry, a 40% memory increase (D38) |
 | Revisiting `std.Io` as the concurrency layer | a Zig release where the io_uring backend implements networking. Would be a large rewrite of the event loop for no measured gain, so it needs a reason beyond tidiness (D27) |
-| Long-polling instead of SSE for the live view | **no longer speculative.** The default edge behaviour is now measured and it buffers SSE in ~8 KB batches (D68), so this is built as the second implementation behind M4's transport seam and enabled if `sseprobe.py` cannot be made to pass against the real zone after the D31 configuration is applied |
+| SSE for the live view | users noticing the 3-second poll as lag rather than liveness, with a concrete case. Would reintroduce the parked-connection machinery D95 removed, and would need the edge buffering answer D68 measured to have changed |
 | Pruning `TagHeads` of tags whose entries have all expired | `GET /app/tags` naming empty tags becoming a real complaint, **or** the map's unbounded growth becoming measurable. It is never pruned today — the only removal in it is an error rollback inside `push` — so it holds every `(account, tag)` pair ever written until a restart. Both effects are cosmetic at trial scale, and the fix puts new code on the maintenance thread M1's fourth exit condition depends on (D92) |
 | A maintenance-time index sweep reclaiming a deleted account's entries early | disk pressure from deleted accounts becoming measurable. The bytes are already unreachable and already scheduled for removal within the plan's maximum lifetime, so this buys earlier reclamation only — at the cost of new code on the thread M1's fourth exit condition depends on (D77) |
 | One ring per core via `SO_REUSEPORT` | measured single-ring throughput becoming a constraint. At 2.9M req/s on one thread this is far off (D27) |

@@ -79,20 +79,20 @@ edge:
 
 | | state |
 |---|---|
-| M0 — retire the unknowns | complete, except the Cloudflare half of the SSE question, which needs a live zone |
+| M0 — retire the unknowns | complete. The Cloudflare half of the SSE question was answered by measurement and closed by removing SSE (D95) |
 | M1 — storage engine | complete, five exit conditions measured |
 | M2 — data plane | endpoints, credits, rate limit, idempotency: **complete and verified over HTTP** |
 | M2 — origin binary | **complete.** `zig build` produces `doot`: configuration from the environment, the maintenance thread, and a graceful shutdown that keeps credit balances exact across a deploy (D63) |
-| M2 — the live feed | **built.** `GET /app/stream`, SSE or JSON on one path, over the D44 ring. Passes `ops/sseprobe.py` over loopback in CI; the run through the zone is scheduled with M5 (D68) |
+| M2 — the live feed | **complete.** `GET /app/stream` answers one immediate JSON batch over the D44 ring, polled by the dashboard every 3 seconds (D95) |
 | M2 — origin TLS and the edge | **outstanding.** Both gate on infrastructure that does not exist yet |
 | M3 — accounts | **complete.** Signup, verification, login, sessions, password reset, account and key management, the read-only explorer, and GitHub OAuth. Both exit conditions verified over the wire by `tools/app-check.sh`, including enumeration resistance as a *timing* property |
-| M4 — dashboard | **decisions settled (D88–D94), no code yet.** Three of the seven exist because reading the built control plane as the dashboard's first caller found questions the specification never had to answer — starting with the fact that nothing in the tree could serve an unauthenticated byte |
+| M4 — dashboard | **implementation complete except the timed drill (D94).** Document plane, tags, shell, explorer, first-run key screen, poll-based live view — verified over HTTP by `tools/dashboard-check.sh`. Three of the seven decisions exist because reading the built control plane as the dashboard's first caller found questions the specification never had to answer — starting with the fact that nothing in the tree could serve an unauthenticated byte |
 | M5–M6 | not started |
 
-**Two of M2's three exit conditions are now met**: every row of the error catalogue is
+**Both M2 exit conditions are now met**: every row of the error catalogue is
 reproduced by a `curl` invocation in CI, and credits and the rate limit are verified *exactly*
-under concurrent load rather than within a tolerance. Only the SSE probe through the real
-Cloudflare zone is outstanding, and it needs the zone to exist.
+under concurrent load rather than within a tolerance. (There used to be a third — the SSE
+probe through the real Cloudflare zone — deleted with the stream it verified, D95.)
 
 Closing them turned up two defects worth naming, both now fixed and both regression-checked:
 a `Content-Type` carrying a control byte was stored and charged for and then failed on every
@@ -105,11 +105,10 @@ cookies and a synchroniser token. That closed D63's one recorded open question �
 account comes into being — without the operator subcommand it warned would be built to be
 replaced.
 
-The **live feed** is built: `GET /app/stream` serves SSE or an immediate JSON batch on one path,
-and the client's `Accept` header chooses (D87). `ops/sseprobe.py` — the probe written in M0 for
-exactly this question — judges it streaming against the real endpoint in CI. What is still
-outstanding is running that probe *through the Cloudflare zone*, which needs a reachable origin
-and is scheduled with M5.
+The **live view** is a short poll: `GET /app/stream` answers one immediate JSON batch
+— `{"events":[{"seq":N,"op":"put"}],"cursor":M,"resync":false}` — and the dashboard polls
+it every 3 seconds with `?cursor=N` (D95). SSE was built, measured breaking through the
+edge, and removed rather than configured around.
 
 | | measured on one 8-core box |
 |---|---|
@@ -157,12 +156,13 @@ key was still a line in an environment-variable list. Building the data plane th
 twelve more (D52–D63), each settled in its own pass before the code it governs. M3 settled
 eleven before the control plane (D68–D78) and building it forced five more (D79–D83).
 
-**94 decisions now, and the pattern has held every time.** M4's pass (D88–D94) found three
+**95 decisions now, and the pattern has held every time.** M4's pass (D88–D94) found three
 things the specification had never had to answer, before a line of dashboard code existed:
 nothing in the tree could serve an unauthenticated byte, so `GET /` was a `401` and a sign-in
 screen could not load; nothing could enumerate an account's tags, which the explorer cannot
 work without; and "an API key is issued on first landing" read literally exhausts the five-key
-cap in five reloads. See [`docs/07-decisions.md`](docs/07-decisions.md).
+cap in five reloads. D95 then removed the SSE live view the earlier passes had built, after
+measurement showed the edge buffering it. See [`docs/07-decisions.md`](docs/07-decisions.md).
 
 Doot runs on a single machine and makes a best-effort durability promise, not a
 guarantee. Data is backed up off-box continuously with a recovery point of a few minutes.
@@ -195,13 +195,12 @@ collapsed into a single `REFERENCE.md` at v1-beta and deleted. Start with
 | [`07-decisions.md`](docs/07-decisions.md) | every locked decision and rejected alternative |
 | [`08-roadmap.md`](docs/08-roadmap.md) | milestones to first public deploy |
 
-Three directories outside `docs/` are permanent:
+Two directories outside `docs/` are permanent:
 
 | | |
 |---|---|
 | [`toolchain/`](toolchain/) | pinned Zig version, hash, and the stdlib patch it requires. `toolchain/setup.sh` builds the environment from scratch |
 | [`tools/`](tools/) | the M1 exit-condition harness and its crash subject, the transport and data-plane harnesses with the `curl` check scripts that drive them, the origin binary's boot and shutdown checks, and the vocabulary check |
-| [`ops/`](ops/) | deployment artifacts. The SSE verification probe today; the Cloudflare zone configuration in M2 |
 
 `spikes/` held the M0 validation code and was deleted at M1 as always intended. The findings
 are D26–D31; the code is in git history at `4547b32`.

@@ -163,8 +163,7 @@ pub const AppRoute = union(enum) {
 
     /// `GET /app/stream` — the live feed.
     ///
-    /// One path, two framings, chosen by the `Accept` header (D87): `text/event-stream` gets
-    /// SSE, anything else gets one JSON batch when events arrive or the wait expires.
+    /// One immediate JSON batch: the client's cursor in, the next cursor out (D95).
     stream,
 
     wrong_method: []const u8,
