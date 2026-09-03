@@ -3,15 +3,15 @@
  * No inline script anywhere: D89's CSP forbids 'unsafe-inline', so this file is the
  * only script the shell loads.
  *
- * Flow (D90, D91, D92, D93):
+ * Flow (D90, D91, D92, D95):
  *   1. GET /app/account: 200 is signed in, 401 is the sign-in screen. The response is
  *      also the whole bootstrap -- credits, plan limits, and the synchroniser token.
  *   2. Signed in with no keys: create one (D91). The plaintext lives in this variable
  *      and nowhere else -- not storage, not the URL (D76).
- *   3. GET /app/tags feeds the explorer. A current tag is re-listed on every live
- *      frame, coalesced to one in flight and one per 500 ms (D93).
- *   4. EventSource('/app/stream') first; after 20 s with no frame at all, close it and
- *      poll the same path as JSON for the rest of the page's life (D93).
+ *   3. GET /app/tags feeds the explorer. The current tag is re-polled every 3 seconds,
+ *      coalesced to one in flight and one per 500 ms (D95).
+ *   4. GET /app/stream?cursor=N carries the change notifications; a non-empty batch
+ *      (or resync) triggers the same refetch (D95).
  */
 
 "use strict";
@@ -333,51 +333,25 @@ function curlFor(plaintext) {
   );
 }
 
-/* -- live view (D93) -- */
+/* -- live view (D95) -- */
 
 function setLiveMode(mode) {
   state.liveMode = mode;
   const badge = el("live-badge");
-  badge.textContent = mode === "live" ? "live" : mode === "polling" ? "polling" : "connecting";
+  badge.textContent = mode === "live" ? "live" : "connecting";
   badge.className = mode === "live" ? "status-live" : "status-polling";
 }
 
 function watchLive() {
   setLiveMode("connecting");
-  const src = new EventSource("/app/stream");
-  // Satisfied by anything at all -- an event frame or a heartbeat comment. The
-  // heartbeat is due at 15 s, so a working stream must produce something inside
-  // 20 s, while a buffering path produces nothing (D93).
-  const deadline = window.setTimeout(() => {
-    // Sticky for the page's lifetime: a path that buffered once will buffer again
-    // (D93).
-    src.close();
-    setLiveMode("polling");
-    pollLoop();
-  }, 20000);
-
-  src.onmessage = (ev) => {
-    window.clearTimeout(deadline);
-    setLiveMode("live");
-    onFrame();
-  };
-  src.addEventListener("resync", () => {
-    window.clearTimeout(deadline);
-    setLiveMode("live");
-    onFrame();
-  });
-  src.onerror = () => {
-    // A dead stream without a frame is the same as a buffered one: fall back.
-    // (A stream that errored after frames arrived keeps its EventSource; only the
-    // first-frame deadline switches transports.)
-  };
+  pollLoop();
 }
 
 function onFrame() {
-  // A frame is a notification, so the response is to re-run the current listing --
+  // A batch is a notification, so the response is to re-run the current listing --
   // coalesced to one in flight and one per 500 ms, because the control-plane bucket
   // is 300 ops/min and an uncoalesced refetch rate-limits the dashboard out of its
-  // own live view (D93).
+  // own live view (D95).
   const now = Date.now();
   if (state.refetchInflight || now < state.refetchAt) return;
   state.refetchInflight = true;
@@ -388,6 +362,9 @@ function onFrame() {
 }
 
 async function pollLoop() {
+  // The live view is a short poll (D95): one immediate JSON batch every 3 seconds.
+  // ~20 requests/min against the 300/min control-plane bucket. The first batch with
+  // events flips the badge from connecting to live.
   for (;;) {
     const q = state.pollCursor === null ? "" : "?cursor=" + state.pollCursor;
     const r = await fetch("/app/stream" + q, {
@@ -404,7 +381,10 @@ async function pollLoop() {
     if (r.ok) {
       const body = await r.json();
       state.pollCursor = body.cursor;
-      if (body.events.length > 0 || body.resync) onFrame();
+      if (body.events.length > 0 || body.resync) {
+        setLiveMode("live");
+        onFrame();
+      }
     }
     await new Promise((done) => window.setTimeout(done, 3000));
   }
