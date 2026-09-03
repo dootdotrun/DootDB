@@ -379,15 +379,29 @@ the two-pass rule earning its keep for the fourth milestone running.
 | D93 | the client asks for SSE and falls back after a **20-second** first-frame deadline; a frame triggers a refetch coalesced to one per 500 ms, because the control-plane bucket is 300 ops/min and an uncoalesced refetch rate-limits the dashboard out of its own live view |
 | D94 | the exit condition splits: `tools/dashboard-check.sh` asserts the surface in CI, and the 60 seconds is a timed manual drill recorded like every other measured figure |
 
-### Pass 2 — implementation
+### Pass 2 — implementation · **COMPLETE except the timed drill**
 
-- Signup and login
-- **First-run screen: the API key beside a paste-ready `curl` command.** This screen is
-  the conversion moment and gets disproportionate attention
+Built and verified over HTTP by `tools/dashboard-check.sh` (58 checks, in CI):
+
+- The document plane: `/` and `/app` with no cookie, digest-addressed CSS/JS with
+  `immutable`, `no-store` HTML with the CSP D89 assigns, `/favicon.ico` as `404`
+- `GET /app/tags` on the control plane only, capped at 200 with `"truncated"`,
+  isolated per account
+- Signup and login through the shell's forms; the bootstrap as one
+  `GET /app/account` (D90)
+- **First-run screen: the API key beside a paste-ready `curl` command**, created
+  only when the account holds none (D91)
 - Entry explorer: list by tag, read one entry, content-type-aware rendering
-- Live view over the D87 seam, with D93's client-side fallback
-- Credit counter with the mail-us-for-credits button
-- API key management
+- Live view over the D87 seam, with D93's client-side fallback (SSE first, JSON
+  poll after a 20-second first-frame deadline, sticky for the page)
+- Credit counter with the mail-us-for-credits button, refreshed on the live trigger
+
+Drill, loopback, 2026-09-03: the whole mechanical path — shell, signup, verify,
+first key, `PUT getting-started/hello`, explorer listing showing it, live feed
+carrying the `put` frame — in **625 ms** wall clock, timed with `curl` against the
+`app` harness. That is the machine's share; the remaining budget is human
+reading and typing, which no script can spend. Re-run at the end of M5 on the
+deployed box, where the number finally includes the edge, TLS and a real network.
 
 **Exit:** a new user goes from landing page to a written entry visible in the live view in
 **under 60 seconds**, timed, on a cold browser. This is the product thesis and it is a

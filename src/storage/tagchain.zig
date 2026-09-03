@@ -162,6 +162,49 @@ pub const TagHeads = struct {
             .bytes = self.map.capacity() * entry_overhead + tag_bytes,
         };
     }
+
+    pub const TagsResult = struct {
+        /// Tags written into `out`, up to `out.len`.
+        count: usize,
+        /// True when more of this account's tags existed than `out` could hold.
+        truncated: bool,
+    };
+
+    /// Every tag this account has written (D92).
+    ///
+    /// A filtered scan of the map: no disk, no traversal. The tags named are *known*, not
+    /// non-empty — this map is never pruned, so a tag whose entries all expired keeps its
+    /// entry until a restart. Order is the map's, which the caller must not depend on.
+    ///
+    /// Tags are engine-validated on the way in (`validateTag`), so a tag longer than
+    /// `max_tag_bytes` cannot be here; one that does not fit `out`'s slot is skipped rather
+    /// than truncated.
+    pub fn tagsForAccount(
+        self: *TagHeads,
+        account_id: u32,
+        out: [][]const u8,
+        max_tag_len: usize,
+    ) TagsResult {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var result: TagsResult = .{ .count = 0, .truncated = false };
+        var it = self.map.keyIterator();
+        while (it.next()) |k| {
+            if (k.account_id != account_id) continue;
+            if (result.count == out.len) {
+                result.truncated = true;
+                return result;
+            }
+            if (k.tag.len > max_tag_len) {
+                result.truncated = true;
+                continue;
+            }
+            out[result.count] = k.tag;
+            result.count += 1;
+        }
+        return result;
+    }
 };
 
 /// Where a paginated walk resumes. Opaque to callers; the store signs it before
@@ -436,4 +479,53 @@ test "cursor start and exhaustion states are distinguishable" {
     c.last_seq = 10;
     try testing.expect(!c.isStart());
     try testing.expect(c.exhausted());
+}
+
+test "a tag scan names only the account's own tags" {
+    var th = TagHeads.init(testing.allocator);
+    defer th.deinit();
+
+    _ = try th.push(1, "ci", 0, Location.init(0, 1, 100));
+    _ = try th.push(1, "main", 2, Location.init(2, 5, 300));
+    _ = try th.push(2, "theirs", 0, Location.init(0, 1, 200));
+
+    var slots: [4][]const u8 = undefined;
+    const got = th.tagsForAccount(1, &slots, 64);
+    try testing.expectEqual(@as(usize, 2), got.count);
+    try testing.expect(!got.truncated);
+
+    var saw_ci = false;
+    var saw_main = false;
+    for (slots[0..got.count]) |t| {
+        if (std.mem.eql(u8, t, "ci")) saw_ci = true;
+        if (std.mem.eql(u8, t, "main")) saw_main = true;
+        try testing.expect(!std.mem.eql(u8, t, "theirs"));
+    }
+    try testing.expect(saw_ci and saw_main);
+}
+
+test "a tag scan with no tags is empty, not an error" {
+    var th = TagHeads.init(testing.allocator);
+    defer th.deinit();
+
+    _ = try th.push(9, "elsewhere", 0, Location.init(0, 1, 100));
+
+    var slots: [4][]const u8 = undefined;
+    const got = th.tagsForAccount(1, &slots, 64);
+    try testing.expectEqual(@as(usize, 0), got.count);
+    try testing.expect(!got.truncated);
+}
+
+test "a tag scan reports truncation when the caller's slice fills" {
+    var th = TagHeads.init(testing.allocator);
+    defer th.deinit();
+
+    _ = try th.push(1, "a", 0, Location.init(0, 1, 100));
+    _ = try th.push(1, "b", 0, Location.init(0, 1, 200));
+    _ = try th.push(1, "c", 0, Location.init(0, 1, 300));
+
+    var slots: [2][]const u8 = undefined;
+    const got = th.tagsForAccount(1, &slots, 64);
+    try testing.expectEqual(@as(usize, 2), got.count);
+    try testing.expect(got.truncated);
 }

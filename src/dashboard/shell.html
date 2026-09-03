@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doot — dashboard</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.@@DOOT_DIGEST@@.css">
+</head>
+<body>
+<header class="top">
+<h1>Doot</h1>
+<span class="credits">credits <strong id="credits-remaining">—</strong> · <span id="plan-name">—</span></span>
+</header>
+<main>
+<section class="panel" id="view-auth">
+<h2>Sign in</h2>
+<form id="login-form">
+<label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+<label class="field"><span>Password</span><input type="password" name="password" required autocomplete="current-password"></label>
+<button type="submit">Sign in</button>
+<p id="login-msg" role="status"></p>
+</form>
+<h2>New here</h2>
+<form id="signup-form">
+<label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+<label class="field"><span>Password (10+ characters)</span><input type="password" name="password" required autocomplete="new-password"></label>
+<button type="submit">Sign up</button>
+<p id="signup-msg" role="status"></p>
+</form>
+<form id="verify-form">
+<label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+<label class="field"><span>Six-digit code</span><input type="text" name="code" required inputmode="numeric" autocomplete="one-time-code"></label>
+<button type="submit">Verify</button>
+<p id="verify-msg" role="status"></p>
+</form>
+</section>
+<section class="panel" id="view-app" hidden>
+<h2>Account</h2>
+<p><span id="account-email"></span> · <span id="account-id"></span></p>
+<p><button class="secondary" id="logout-btn" type="button">Sign out</button>
+<a id="credits-mail" href="mailto:support@doot.run">Mail us for credits</a></p>
+<h2>Explorer · <span id="live-badge" class="status-polling">connecting</span></h2>
+<p id="tags-note" class="notice" hidden></p>
+<div id="tag-list"></div>
+<h2 id="current-tag">(pick a tag)</h2>
+<ul class="entries" id="entry-list"></ul>
+<div id="entry-body"></div>
+<h2>API keys</h2>
+<ul class="entries" id="key-list"></ul>
+<p><button id="create-key" type="button">Create a key</button></p>
+<p id="keys-msg" role="status"></p>
+</section>
+<section class="panel" id="first-run" hidden>
+<h2>Your API key — shown once</h2>
+<p class="notice">Copy it now. It cannot be retrieved later; create another from the keys panel if you lose it.</p>
+<p class="apikey" id="first-key"></p>
+<p><button class="secondary" id="dismiss-key" type="button">I saved it</button></p>
+<h2>Try it</h2>
+<pre class="curl" id="first-curl"></pre>
+</section>
+<section class="panel" id="view-fatal" hidden>
+<h2>Something is wrong</h2>
+<p class="error" id="fatal-text"></p>
+</section>
+</main>
+<script src="/app.@@DOOT_DIGEST@@.js"></script>
+</body>
+</html>

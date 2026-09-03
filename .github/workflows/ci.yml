@@ -120,3 +120,11 @@ jobs:
       # flaky-by-construction shape.
       - name: M3 control-plane checks
         run: tools/app-check.sh
+
+      # M4's dashboard surface, driven by `curl` (D94). The machine half of the exit
+      # condition: every document-plane path with no cookie, the digest the binary
+      # computed matching the digest its HTML references, the bootstrap contract, the
+      # tag list and its isolation, both live-view framings, and the server half of
+      # the conversion moment. The 60 seconds stays a timed manual drill, written down.
+      - name: M4 dashboard checks
+        run: tools/dashboard-check.sh

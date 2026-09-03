@@ -109,11 +109,13 @@ hdr "the surface exists, and unknown paths do not"
 # ---------------------------------------------------------------------------
 
 equals "an unrouted control-plane path is 404" 404 "$(status "$BASE/app/nope")"
-# `/app` with nothing after it is not the control plane, so it falls to the data plane -- where
-# authentication happens *before* routing, so an unknown path is a 401 and never reveals whether
-# it existed (D52, 02-api.md). That is the same answer every unknown /v1 path gives.
-equals "/app itself falls to the data plane, which authenticates before routing" 401 \
+# `/app` is the dashboard shell (D88): the document plane serves it with no cookie, which
+# is the property D88 exists to create. A 401 on the dashboard's own front door would be
+# the bug.
+equals "/app is the shell, served with no cookie" 200 \
   "$(status "$BASE/app")"
+contains "and it references the digest-bearing assets" "/app." \
+  "$(body "$BASE/app")"
 # The live feed is routed now, so it answers like every other session-authenticated route:
 # 401 without a session rather than 404. Its own section below drives it properly.
 equals "the live feed needs a session" 401 "$(status "$BASE/app/stream")"

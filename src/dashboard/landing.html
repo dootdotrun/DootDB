@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doot — ephemeral data storage over plain HTTP</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.@@DOOT_DIGEST@@.css">
+</head>
+<body>
+<header class="top">
+<h1>Doot</h1>
+</header>
+<main>
+<section class="panel">
+<h2>Ephemeral data storage over plain HTTP</h2>
+<p>For the few kilobytes needed for hours or days, written by a shell script or an
+automation node, then irrelevant. No client library. No query language. No setup.</p>
+<pre class="curl">curl -X PUT https://doot.run/v1/entries/ci/last-green-sha \
+  -H "Authorization: Bearer $DOOT_KEY" \
+  -H "X-Doot-Tags: ci,main" \
+  -H "X-Doot-TTL: 14d" \
+  --data-binary @sha.txt</pre>
+<p><a href="/app">Open the dashboard</a> — sign up, take the key, paste the command,
+watch the entry arrive live.</p>
+</section>
+<section class="panel">
+<h2>The bundle</h2>
+<p>Lifetime is mandatory. Tags instead of a query language. Reads are free. A live
+data explorer. That is the whole product.</p>
+</section>
+</main>
+<script src="/app.@@DOOT_DIGEST@@.js"></script>
+</body>
+</html>
