@@ -124,17 +124,18 @@ Recovery is a warm-page-cache figure and says so: it moves with the filesystem, 
 number the operational lever derives from gets re-measured on the deployed volume in M5
 (D48).
 
-**618 unit tests plus seven harnesses, all run by CI on every push:**
+**629 unit tests plus eight harnesses, all run by CI on every push:**
 
 ```bash
 tools/vocab-check.sh                                    # D2 vocabulary rule
-zig build test                                          # 618 unit tests
+zig build test                                          # 629 unit tests
 zig build verify && ./zig-out/bin/m1 all /dev/shm/doot-m1  # 5 M1 exit conditions
 tools/transport-check.sh                                # 52 curl checks
 tools/dataplane-check.sh                                # 158 curl checks
 tools/boot-check.sh                                     # 33 checks against the real binary
 tools/exactness-check.sh                                # 28 concurrency and capacity checks
-tools/app-check.sh                                      # 79 control-plane and live-feed checks
+tools/app-check.sh                                      # 80 control-plane and live-feed checks
+tools/dashboard-check.sh                                # 58 dashboard-surface checks
 ```
 
 `m1 all` runs the recovery check at its 300,000-record default, which measures the replay
@@ -171,11 +172,10 @@ Don't use Doot as the only copy of anything you cannot lose.
 
 A single statically linked [Zig](https://ziglang.org) binary. One process, one machine.
 The dashboard will be plain HTML, CSS and vanilla JavaScript embedded into the binary with
-`@embedFile` — no framework, no bundler, no build step, no separate deployment. **It is not
-built yet**; M4 owns it, and nothing in the tree embeds an asset today. Its decisions are
-settled (D88–D94): the documents are a **third plane** authenticating with nothing, served
-from a fixed table of exact paths, with the build digest in each asset filename so a deploy
-invalidates a cache without a revalidation round trip.
+`@embedFile` — no framework, no bundler, no build step, no separate deployment. It is
+built: `src/dashboard/*` holds the shell, the landing page, the stylesheet and the
+vanilla-JS client, and `src/service/documents.zig` embeds them with the build digest in
+each asset filename so a deploy invalidates a cache without a revalidation round trip.
 
 ## Documentation
 
