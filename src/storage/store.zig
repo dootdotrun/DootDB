@@ -640,6 +640,19 @@ pub const Store = struct {
         );
     }
 
+    /// The tags this account has written, for the explorer (D92, `06-auth.md`).
+    ///
+    /// A filtered scan of the in-RAM head map: no disk, no traversal. The caller supplies
+    /// the slice to fill; the result says how many it holds and whether more existed.
+    /// Isolation is the whole of the correctness requirement: only this account's tags.
+    pub fn listTags(
+        self: *Store,
+        account_id: u32,
+        out: [][]const u8,
+    ) tagchain.TagHeads.TagsResult {
+        return self.heads.tagsForAccount(account_id, out, config.max_tag_bytes);
+    }
+
     // -----------------------------------------------------------------------
     // Maintenance
     // -----------------------------------------------------------------------
